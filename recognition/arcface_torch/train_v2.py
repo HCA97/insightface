@@ -16,7 +16,9 @@ from torch.utils.tensorboard import SummaryWriter
 from utils.utils_callbacks import CallBackLogging, CallBackVerification
 from utils.utils_config import get_config
 from utils.utils_distributed_sampler import setup_seed
-from utils.utils_logging import AverageMeter, init_logging
+from utils.utils_logging import AverageMeter, init_logging, get_lr_groups
+from transformers import get_cosine_schedule_with_warmup
+
 
 assert torch.__version__ >= "1.12.0", "In order to enjoy the features of the new torch, \
 we have upgraded the torch to 1.12.0. torch before than 1.12.0 may not work in the future."
@@ -116,31 +118,37 @@ def main(args):
             cfg.sample_rate, cfg.fp16)
         module_partial_fc.train().cuda()
         # TODO the params of partial fc must be last in the params list
-        opt = torch.optim.SGD(
-            params=[{"params": backbone.parameters()}, {"params": module_partial_fc.parameters()}],
-            lr=cfg.lr, momentum=0.9, weight_decay=cfg.weight_decay)
+        parameters = backbone.module.get_parameters()
+        parameters.append({"params": module_partial_fc.parameters(), 'lr': cfg.lr, 'weight_decay': cfg.weight_decay})
+        opt = torch.optim.SGD(params=parameters, momentum=0.9)
 
     elif cfg.optimizer == "adamw":
         module_partial_fc = PartialFC_V2(
             margin_loss, cfg.embedding_size, cfg.num_classes,
             cfg.sample_rate, cfg.fp16)
         module_partial_fc.train().cuda()
-        opt = torch.optim.AdamW(
-            params=[{"params": backbone.parameters()}, {"params": module_partial_fc.parameters()}],
-            lr=cfg.lr, weight_decay=cfg.weight_decay)
+        parameters = backbone.module.get_parameters()
+        parameters.append({"params": module_partial_fc.parameters(), 'lr': cfg.lr, 'weight_decay': cfg.weight_decay})
+        opt = torch.optim.AdamW(params=parameters)
     else:
         raise
 
     cfg.total_batch_size = cfg.batch_size * world_size
-    cfg.warmup_step = cfg.num_image // cfg.total_batch_size * cfg.warmup_epoch
+    cfg.warmup_step = cfg.warmup_step
     cfg.total_step = cfg.num_image // cfg.total_batch_size * cfg.num_epoch
 
-    lr_scheduler = PolyScheduler(
+    # lr_scheduler = PolyScheduler(
+    #     optimizer=opt,
+    #     base_lr=cfg.lr,
+    #     max_steps=cfg.total_step,
+    #     warmup_steps=cfg.warmup_step,
+    #     last_epoch=-1
+    # )
+
+    lr_scheduler = get_cosine_schedule_with_warmup(
         optimizer=opt,
-        base_lr=cfg.lr,
-        max_steps=cfg.total_step,
-        warmup_steps=cfg.warmup_step,
-        last_epoch=-1
+        num_training_steps= cfg.total_step,
+        num_warmup_steps = cfg.warmup_step
     )
 
     start_epoch = 0
@@ -191,13 +199,16 @@ def main(args):
                     amp.step(opt)
                     amp.update()
                     opt.zero_grad()
+                    lr_scheduler.step()
             else:
                 loss.backward()
                 if global_step % cfg.gradient_acc == 0:
                     torch.nn.utils.clip_grad_norm_(backbone.parameters(), 5)
                     opt.step()
                     opt.zero_grad()
-            lr_scheduler.step()
+                    lr_scheduler.step()
+            # we update it when we update weights
+            # lr_scheduler.step()
 
             with torch.no_grad():
                 if wandb_logger:
@@ -209,7 +220,7 @@ def main(args):
                     })
                     
                 loss_am.update(loss.item(), 1)
-                callback_logging(global_step, loss_am, epoch, cfg.fp16, lr_scheduler.get_last_lr()[0], amp)
+                callback_logging(global_step, loss_am, epoch, cfg.fp16, get_lr_groups(opt.param_groups), amp)
 
                 if global_step % cfg.verbose == 0 and global_step > 0:
                     callback_verification(global_step, backbone)
@@ -226,7 +237,7 @@ def main(args):
             torch.save(checkpoint, os.path.join(cfg.output, f"checkpoint_gpu_{rank}.pt"))
 
         if rank == 0:
-            path_module = os.path.join(cfg.output, "model.pt")
+            path_module = os.path.join(cfg.output, f"model_{epoch}.pt")
             torch.save(backbone.module.state_dict(), path_module)
 
             if wandb_logger and cfg.save_artifacts:
@@ -239,7 +250,7 @@ def main(args):
             train_loader.reset()
 
     if rank == 0:
-        path_module = os.path.join(cfg.output, "model.pt")
+        path_module = os.path.join(cfg.output, f"model_last.pt")
         torch.save(backbone.module.state_dict(), path_module)
         
         if wandb_logger and cfg.save_artifacts:

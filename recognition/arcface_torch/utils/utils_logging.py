@@ -39,3 +39,9 @@ def init_logging(rank, models_root):
         log_root.addHandler(handler_file)
         log_root.addHandler(handler_stream)
         log_root.info('rank_id: %d' % rank)
+
+
+def get_lr_groups(param_groups):
+    groups = sorted(set([param_g['lr'] for param_g in param_groups]))
+    groups = ["{:2e}".format(group) for group in groups]
+    return groups

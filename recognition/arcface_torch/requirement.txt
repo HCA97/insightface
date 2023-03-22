@@ -4,3 +4,7 @@ mxnet
 onnx
 sklearn
 opencv-python
+open-clip-torch
+transformers
+numpy==1.23.1
+scikit-learn

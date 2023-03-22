@@ -80,6 +80,10 @@ def get_model(name, **kwargs):
         return VisionTransformer(
             img_size=112, patch_size=9, num_classes=num_features, embed_dim=768, depth=24,
             num_heads=8, drop_path_rate=0.05, norm_layer="ln", mask_ratio=0.05, using_checkpoint=True)
+    
+    elif name == 'vit_h_clip':
+        from .clip import ViT_CLIP
+        return ViT_CLIP('ViT-H-14', 'laion2b_s32b_b79k')
 
     else:
         raise ValueError()

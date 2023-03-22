@@ -40,11 +40,27 @@ def get_dataloader(
 
     # Image Folder
     else:
+        # transform = transforms.Compose([
+        #      transforms.RandomHorizontalFlip(),
+        #      transforms.ToTensor(),
+        #      transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
+        #      ])
+
+        # clip processing
         transform = transforms.Compose([
-             transforms.RandomHorizontalFlip(),
-             transforms.ToTensor(),
-             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
-             ])
+            # my data augmentation
+            transforms.AutoAugment(transforms.AutoAugmentPolicy.IMAGENET),
+            # clip processing
+            transforms.Resize(
+                size=(224, 224), 
+                interpolation=transforms.InterpolationMode.BICUBIC,
+                antialias=True),
+            transforms.ToTensor(), 
+            transforms.Normalize(
+                mean=(0.48145466, 0.4578275, 0.40821073), 
+                std=(0.26862954, 0.26130258, 0.27577711)
+            )
+        ])
         train_set = ImageFolder(root_dir, transform)
 
     # DALI
